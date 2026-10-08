@@ -1,0 +1,8 @@
+config LUCI_LANG_zh_Hans
+	default y if PACKAGE_luci-app-nikki
+
+config LUCI_LANG_zh_Hant
+	default y if PACKAGE_luci-app-nikki
+
+config LUCI_LANG_ru
+	default y if PACKAGE_luci-app-nikki
