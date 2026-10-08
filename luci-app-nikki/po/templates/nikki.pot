@@ -1118,3 +1118,40 @@ msgstr ""
 #: applications/luci-app-nikki/htdocs/luci-static/resources/view/nikki/app.js:128
 msgid "procd Config"
 msgstr ""
+
+msgid "eBPF Mode"
+msgstr ""
+
+msgid "eBPF Config"
+msgstr ""
+
+msgid "Local Data Plane"
+msgstr ""
+
+msgid "Bypass Rule Set"
+msgstr ""
+
+msgid "Auto"
+msgstr ""
+
+msgid "TC"
+msgstr ""
+
+msgid "Hijack"
+msgstr ""
+
+msgid "Respect Policy"
+msgstr ""
+
+msgid "Off"
+msgstr ""
+
+msgid "Data plane used to take over the router's own traffic, auto uses cgroup when cgroup v2 is available."
+msgstr ""
+
+msgid "auto hijacks DNS when IPv4/IPv6 DNS Hijack is enabled."
+msgstr ""
+
+msgid "Rule provider tags whose IP CIDRs are bypassed, a CN IP rule set is generated when Bypass China Mainland IP is enabled."
+msgstr ""
+

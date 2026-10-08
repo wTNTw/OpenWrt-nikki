@@ -1125,3 +1125,40 @@ msgstr "用户名"
 #: applications/luci-app-nikki/htdocs/luci-static/resources/view/nikki/app.js:128
 msgid "procd Config"
 msgstr "procd 配置"
+
+msgid "eBPF Mode"
+msgstr "eBPF 模式"
+
+msgid "eBPF Config"
+msgstr "eBPF 配置"
+
+msgid "Local Data Plane"
+msgstr "本机数据面"
+
+msgid "Bypass Rule Set"
+msgstr "直连规则集"
+
+msgid "Auto"
+msgstr "自动"
+
+msgid "TC"
+msgstr "TC"
+
+msgid "Hijack"
+msgstr "劫持"
+
+msgid "Respect Policy"
+msgstr "遵循策略"
+
+msgid "Off"
+msgstr "关闭"
+
+msgid "Data plane used to take over the router's own traffic, auto uses cgroup when cgroup v2 is available."
+msgstr "接管本机流量所使用的数据面，auto 在支持 cgroup v2 时使用 cgroup，否则使用 tc。"
+
+msgid "auto hijacks DNS when IPv4/IPv6 DNS Hijack is enabled."
+msgstr "auto 在启用 IPv4/IPv6 DNS 劫持时劫持 DNS。"
+
+msgid "Rule provider tags whose IP CIDRs are bypassed, a CN IP rule set is generated when Bypass China Mainland IP is enabled."
+msgstr "直连的规则集标签，启用中国大陆 IP 直连时会自动生成 CN IP 规则集。"
+

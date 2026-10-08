@@ -1,0 +1,60 @@
+name: build-packages-manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Package architecture (e.g. aarch64_generic)
+        required: true
+        default: aarch64_generic
+      branch:
+        description: OpenWrt branch (e.g. openwrt-25.12)
+        required: true
+        default: openwrt-25.12
+      packages:
+        description: Packages to compile, space separated (default skips the mihomo core)
+        required: true
+        default: nikki luci-app-nikki
+      feedname:
+        description: Feed name
+        required: true
+        default: nikki
+
+jobs:
+  build:
+    name: ${{ inputs.arch }}-${{ inputs.branch }} build
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: build
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ inputs.arch }}-${{ inputs.branch }}
+          FEEDNAME: ${{ inputs.feedname }}
+          PACKAGES: ${{ inputs.packages }}
+          NO_REFRESH_CHECK: true
+
+      - name: pack tarball
+        if: always()
+        run: |
+          set -x
+          ARCH='${{ inputs.arch }}'
+          BRANCH='${{ inputs.branch }}'
+          OUT="nikki_${ARCH}-${BRANCH}.tar.gz"
+          ls -la
+          ls -la "bin/packages/${ARCH}/" || true
+          if [ -d "bin/packages/${ARCH}/nikki" ]; then
+            tar -czf "$OUT" -C "bin/packages/${ARCH}" nikki
+            ls -la "$OUT"
+          fi
+
+      - name: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: nikki_${{ inputs.arch }}-${{ inputs.branch }}
+          path: |
+            bin/packages/${{ inputs.arch }}/nikki
+            nikki_${{ inputs.arch }}-${{ inputs.branch }}.tar.gz
+          if-no-files-found: warn

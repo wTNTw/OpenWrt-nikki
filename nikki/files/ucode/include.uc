@@ -62,6 +62,24 @@ export function get_groups() {
 	return map(split(readfile('/etc/group'), '\n'), (x) => split(x, ':')[0]);
 };
 
+export function get_uids(users) {
+	const result = [];
+	const names = users ?? [];
+
+	for (let line in split(readfile('/etc/passwd'), '\n')) {
+		const fields = split(line, ':');
+		if (length(fields) < 3 || index(names, fields[0]) == -1) {
+			continue;
+		}
+		const uid = +fields[2];
+		if (uid >= 0 && index(result, uid) == -1) {
+			push(result, uid);
+		}
+	}
+
+	return result;
+};
+
 export function get_cgroups() {
 	const result = [];
 	if (get_cgroups_version() == 2) {

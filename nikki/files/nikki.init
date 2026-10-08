@@ -103,10 +103,11 @@ start_service() {
 	local mixin_file_content
 	config_get_bool mixin_file_content "mixin" "mixin_file_content" 0
 	## core config
-	local redirect_listener_name tproxy_listener_name tun_listener_name
+	local redirect_listener_name tproxy_listener_name tun_listener_name ebpf_listener_name
 	config_get redirect_listener_name "core" "redirect_listener_name"
 	config_get tproxy_listener_name "core" "tproxy_listener_name"
 	config_get tun_listener_name "core" "tun_listener_name"
+	config_get ebpf_listener_name "core" "ebpf_listener_name" "ebpf-in"
 	## proxy config
 	local proxy_enabled ipv4_dns_hijack ipv6_dns_hijack tcp_mode udp_mode
 	config_get_bool proxy_enabled "proxy" "enabled" 0
@@ -119,11 +120,15 @@ start_service() {
 	config_get_bool log_scheduled_clear "log" "scheduled_clear" 0
 	config_get log_scheduled_clear_cron "log" "scheduled_clear_cron"
 	# get profile
-	local profile_type; profile_type=$(echo "$profile" | cut -d ':' -f 1)
-	local profile_id; profile_id=$(echo "$profile" | cut -d ':' -f 2)
+	local profile_type
+	profile_type=$(echo "$profile" | cut -d ':' -f 1)
+	local profile_id
+	profile_id=$(echo "$profile" | cut -d ':' -f 2)
 	if [ "$profile_type" = "file" ]; then
-		local profile_name; profile_name="$profile_id"
-		local profile_file; profile_file="$PROFILES_DIR/$profile_name"
+		local profile_name
+		profile_name="$profile_id"
+		local profile_file
+		profile_file="$PROFILES_DIR/$profile_name"
 		log "Profile" "Use file: $profile_name."
 		if [ ! -f "$profile_file" ]; then
 			log "Profile" "File not found."
@@ -132,12 +137,14 @@ start_service() {
 		fi
 		cp -f "$profile_file" "$RUN_PROFILE_PATH"
 	elif [ "$profile_type" = "subscription" ]; then
-		local subscription_section; subscription_section="$profile_id"
+		local subscription_section
+		subscription_section="$profile_id"
 		local subscription_name subscription_prefer
 		config_get subscription_name "$subscription_section" "name"
 		config_get subscription_prefer "$subscription_section" "prefer" "remote"
 		log "Profile" "Use subscription: $subscription_name."
-		local subscription_file; subscription_file="$SUBSCRIPTIONS_DIR/$subscription_section.yaml"
+		local subscription_file
+		subscription_file="$SUBSCRIPTIONS_DIR/$subscription_section.yaml"
 		if [ "$subscription_prefer" = "remote" ] || [ ! -f "$subscription_file" ]; then
 			update_subscription "$subscription_section"
 		fi
@@ -183,9 +190,9 @@ start_service() {
 			yq -M -i 'del(.sniffer.sniff)' "$RUN_PROFILE_PATH"
 		fi
 		if [ "$mixin_file_content" = 0 ]; then
-			ucode -S "$MIXIN_UC" | yq -M -p json -o yaml | yq -M -i eval-all '... comments="" | . as $item ireduce ({}; . * $item ) | .proxies = .nikki-proxies + .proxies | del(.nikki-proxies) | .proxy-groups = .nikki-proxy-groups + .proxy-groups | del(.nikki-proxy-groups) | .rules = .nikki-rules + .rules | del(.nikki-rules) | explode(.)' "$RUN_PROFILE_PATH" -
+			ucode -S "$MIXIN_UC" | yq -M -p json -o yaml | yq -M -i eval-all '... comments="" | . as $item ireduce ({}; . * $item ) | .proxies = .nikki-proxies + .proxies | del(.nikki-proxies) | .proxy-groups = .nikki-proxy-groups + .proxy-groups | del(.nikki-proxy-groups) | .rules = .nikki-rules + .rules | del(.nikki-rules) | (if ((.nikki-listeners // []) | length) > 0 then .listeners = ((.nikki-listeners) + (.listeners // [])) else . end) | del(.nikki-listeners) | explode(.)' "$RUN_PROFILE_PATH" -
 		elif [ "$mixin_file_content" = 1 ]; then
-			ucode -S "$MIXIN_UC" | yq -M -p json -o yaml | yq -M -i eval-all '... comments="" | . as $item ireduce ({}; . * $item ) | .proxies = .nikki-proxies + .proxies | del(.nikki-proxies) | .proxy-groups = .nikki-proxy-groups + .proxy-groups | del(.nikki-proxy-groups) | .rules = .nikki-rules + .rules | del(.nikki-rules) | explode(.)' "$RUN_PROFILE_PATH" "$MIXIN_FILE_PATH" -
+			ucode -S "$MIXIN_UC" | yq -M -p json -o yaml | yq -M -i eval-all '... comments="" | . as $item ireduce ({}; . * $item ) | .proxies = .nikki-proxies + .proxies | del(.nikki-proxies) | .proxy-groups = .nikki-proxy-groups + .proxy-groups | del(.nikki-proxy-groups) | .rules = .nikki-rules + .rules | del(.nikki-rules) | (if ((.nikki-listeners // []) | length) > 0 then .listeners = ((.nikki-listeners) + (.listeners // [])) else . end) | del(.nikki-listeners) | explode(.)' "$RUN_PROFILE_PATH" "$MIXIN_FILE_PATH" -
 		fi
 		if [ "$proxy_enabled" = 1 ]; then
 			if yq -M -e 'has("tun")' "$RUN_PROFILE_PATH" > /dev/null 2>&1; then
@@ -227,6 +234,15 @@ start_service() {
 			if yq -M -e "(has(\"tun\") and (.tun | .enable) and (.tun | has(\"device\"))) or (has(\"listeners\") and .listeners | any_c(.name == \"$tun_listener_name\" and .type == \"tun\" and has(\"device\")))) | not" "$RUN_PROFILE_PATH" > /dev/null 2>&1; then
 				log "Profile" "Check failed."
 				log "Profile" "TUN should be defined."
+				log "App" "Exit."
+				return
+			fi
+		fi
+		if [ "$tcp_mode" = "ebpf" ] || [ "$udp_mode" = "ebpf" ]; then
+			if yq -M -e "(has(\"listeners\") and (.listeners | any_c(.name == \"$ebpf_listener_name\" and .type == \"ebpf\"))) | not" "$RUN_PROFILE_PATH" > /dev/null 2>&1; then
+				log "Profile" "Check failed."
+				log "Profile" "eBPF Listener should be defined."
+				log "Profile" "Router Proxy/LAN Proxy should be enabled."
 				log "App" "Exit."
 				return
 			fi
@@ -274,7 +290,8 @@ start_service() {
 
 	procd_close_instance
 	# cron
-	local reload_cron; reload_cron=0
+	local reload_cron
+	reload_cron=0
 	## clear cron
 	if grep -q "#nikki" "/etc/crontabs/root"; then
 		log "App" "Clear cron."
@@ -331,6 +348,18 @@ service_started() {
 	config_get_bool ipv6_proxy "proxy" "ipv6_proxy" 0
 	config_get tun_timeout "proxy" "tun_timeout" 30
 	config_get tun_interval "proxy" "tun_interval" 1
+	### ebpf
+	local ebpf_enabled ebpf_listener_name ebpf_router_proxy ebpf_lan_proxy ebpf_proxy_tcp_dport ebpf_proxy_udp_dport ebpf_tun_enabled
+	ebpf_enabled=0
+	if [ "$tcp_mode" = "ebpf" ] || [ "$udp_mode" = "ebpf" ]; then
+		ebpf_enabled=1
+	fi
+	config_get ebpf_listener_name "core" "ebpf_listener_name" "ebpf-in"
+	config_get_bool ebpf_router_proxy "proxy" "router_proxy" 1
+	config_get_bool ebpf_lan_proxy "proxy" "lan_proxy" 1
+	config_get ebpf_proxy_tcp_dport "proxy" "proxy_tcp_dport" "0-65535"
+	config_get ebpf_proxy_udp_dport "proxy" "proxy_udp_dport" "0-65535"
+	config_get_bool ebpf_tun_enabled "mixin" "tun_enabled" 0
 	## routing config
 	local tproxy_fw_mark tproxy_fw_mask tun_fw_mark tun_fw_mask tproxy_rule_pref tun_rule_pref tproxy_route_table tun_route_table cgroup_id cgroup_name dummy_device
 	config_get tproxy_fw_mark "routing" "tproxy_fw_mark" "0x80"
@@ -345,17 +374,22 @@ service_started() {
 	config_get cgroup_name "routing" "cgroup_name" "nikki"
 	config_get dummy_device "routing" "dummy_device" "nikki-dummy"
 	# prepare config
-	local tproxy_enable; tproxy_enable=0
+	local tproxy_enable
+	tproxy_enable=0
 	if [ "$tcp_mode" = "tproxy" ] || [ "$udp_mode" = "tproxy" ]; then
 		tproxy_enable=1
 	fi
-	local tun_enable; tun_enable=0
+	local tun_enable
+	tun_enable=0
 	if [ "$tcp_mode" = "tun" ] || [ "$udp_mode" = "tun" ]; then
 		tun_enable=1
 	fi
-	local dns_mode; dns_mode=$(yq -M '.dns.enhanced-mode // ""' "$RUN_PROFILE_PATH")
-	local fake_ip6_range; fake_ip6_range=$(yq -M '.dns.fake-ip-range6 // ""' "$RUN_PROFILE_PATH")
-	local tun_device; tun_device=$(yq -M "(.tun | select(.enable) | .device) // (.listeners[] | select(.name == \"$tun_listener_name\" and .type == \"tun\") | .device)" "$RUN_PROFILE_PATH")
+	local dns_mode
+	dns_mode=$(yq -M '.dns.enhanced-mode // ""' "$RUN_PROFILE_PATH")
+	local fake_ip6_range
+	fake_ip6_range=$(yq -M '.dns.fake-ip-range6 // ""' "$RUN_PROFILE_PATH")
+	local tun_device
+	tun_device=$(yq -M "(.tun | select(.enable) | .device) // (.listeners[] | select(.name == \"$tun_listener_name\" and .type == \"tun\") | .device)" "$RUN_PROFILE_PATH")
 	if [ "$core_only" = 0 ]; then
 		# proxy
 		log "Proxy" "Enabled."
@@ -363,7 +397,7 @@ service_started() {
 		if [ "$tun_enable" = 1 ]; then
 			log "Proxy" "Waiting for tun device online within $tun_timeout seconds..."
 			while [ "$tun_timeout" -gt 0 ]; do
-				if ip -j link show dev "$tun_device" 2>/dev/null | jsonfilter -q -e "@[@['flags'][@='UP']]" > /dev/null 2>&1; then
+				if ip -j link show dev "$tun_device" 2> /dev/null | jsonfilter -q -e "@[@['flags'][@='UP']]" > /dev/null 2>&1; then
 					log "Proxy" "TUN device is online."
 					break
 				fi
@@ -388,14 +422,16 @@ service_started() {
 		### when kmod-br-netfilter is loaded, bridge-nf-call-iptables and bridge-nf-call-ip6tables are set to 1, we need to set them to 0 if tproxy is enabled
 		if [ "$tproxy_enable" = 1 ] && (lsmod | grep -q br_netfilter); then
 			if [ "$ipv4_proxy" = 1 ]; then
-				local bridge_nf_call_iptables; bridge_nf_call_iptables=$(sysctl -e -n net.bridge.bridge-nf-call-iptables)
+				local bridge_nf_call_iptables
+				bridge_nf_call_iptables=$(sysctl -e -n net.bridge.bridge-nf-call-iptables)
 				if [ "$bridge_nf_call_iptables" = 1 ]; then
 					touch "$BRIDGE_NF_CALL_IPTABLES_FLAG_PATH"
 					sysctl -q -w net.bridge.bridge-nf-call-iptables=0
 				fi
 			fi
 			if [ "$ipv6_proxy" = 1 ]; then
-				local bridge_nf_call_ip6tables; bridge_nf_call_ip6tables=$(sysctl -e -n net.bridge.bridge-nf-call-ip6tables)
+				local bridge_nf_call_ip6tables
+				bridge_nf_call_ip6tables=$(sysctl -e -n net.bridge.bridge-nf-call-ip6tables)
 				if [ "$bridge_nf_call_ip6tables" = 1 ]; then
 					touch "$BRIDGE_NF_CALL_IP6TABLES_FLAG_PATH"
 					sysctl -q -w net.bridge.bridge-nf-call-ip6tables=0
@@ -428,6 +464,24 @@ service_started() {
 			ip link add "$dummy_device" type dummy
 			ip link set dev "$dummy_device" up
 			ip -6 route add "$fake_ip6_range" dev "$dummy_device"
+		fi
+		# ebpf
+		if [ "$ebpf_enabled" = 1 ]; then
+			local ebpf_data_plane
+			ebpf_data_plane=$(yq -M "(.listeners[] | select(.name == \"$ebpf_listener_name\" and .type == \"ebpf\") | .local.data-plane) // \"\"" "$RUN_PROFILE_PATH")
+			if [ "$ebpf_data_plane" = "cgroup" ] && [ ! -e "/sys/fs/cgroup/cgroup.controllers" ]; then
+				log "Proxy" "cgroup data plane is not available."
+				log "Proxy" "Please set eBPF Data Plane to tc."
+			fi
+			if [ "$ebpf_tun_enabled" = 1 ]; then
+				log "Proxy" "TUN is enabled but not used in eBPF mode."
+			fi
+			if [ "$ebpf_proxy_tcp_dport" != "0-65535" ] || [ "$ebpf_proxy_udp_dport" != "0-65535" ]; then
+				log "Proxy" "Proxy TCP/UDP DPort is not supported in eBPF mode."
+			fi
+			if [ "$ebpf_router_proxy" = 0 ] && [ "$ebpf_lan_proxy" = 0 ]; then
+				log "Proxy" "eBPF mode requires Router Proxy or LAN Proxy to be enabled."
+			fi
 		fi
 		# hijack
 		utpl -S "$HIJACK_UT" | nft -f -
@@ -467,7 +521,7 @@ cleanup() {
 	config_get tun_route_table "routing" "tun_route_table" "81"
 	config_get dummy_device "routing" "dummy_device" "nikki-dummy"
 	# clear logs if needed
-	if [  "$log_clear_at_stop" = 1 ]; then
+	if [ "$log_clear_at_stop" = 1 ]; then
 		echo -n > "$APP_LOG_PATH"
 		echo -n > "$CORE_LOG_PATH"
 		log "Log" "Logs are cleared due to clear at stop is enabled."
@@ -521,19 +575,20 @@ clear_logs() {
 	config_get log_scheduled_clear_size_limit "log" "scheduled_clear_size_limit" 1
 	config_get log_scheduled_clear_size_limit_unit "log" "scheduled_clear_size_limit_unit" "MB"
 	# prepare config
-	local log_scheduled_clear_size_limit_in_bytes; log_scheduled_clear_size_limit_in_bytes=0
+	local log_scheduled_clear_size_limit_in_bytes
+	log_scheduled_clear_size_limit_in_bytes=0
 	case "$log_scheduled_clear_size_limit_unit" in
-		B)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit))
+	B)
+		log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit))
 		;;
-		KB)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024))
+	KB)
+		log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024))
 		;;
-		MB)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024 * 1024))
+	MB)
+		log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024 * 1024))
 		;;
-		GB)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024 * 1024 * 1024))
+	GB)
+		log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024 * 1024 * 1024))
 		;;
 	esac
 	# clear logs
@@ -548,7 +603,8 @@ clear_logs() {
 }
 
 update_subscription() {
-	local subscription_section; subscription_section="$1"
+	local subscription_section
+	subscription_section="$1"
 	if [ -z "$subscription_section" ]; then
 		return
 	fi
@@ -572,11 +628,15 @@ update_subscription() {
 	# update subscription
 	log "Profile" "Update subscription: $subscription_name."
 	local success
-	local subscription_info_header_tmpfile; subscription_info_header_tmpfile="$TEMP_DIR/$subscription_section.info.header"
-	local subscription_header_tmpfile; subscription_header_tmpfile="$TEMP_DIR/$subscription_section.header"
-	local subscription_tmpfile; subscription_tmpfile="$TEMP_DIR/$subscription_section.yaml"
+	local subscription_info_header_tmpfile
+	subscription_info_header_tmpfile="$TEMP_DIR/$subscription_section.info.header"
+	local subscription_header_tmpfile
+	subscription_header_tmpfile="$TEMP_DIR/$subscription_section.header"
+	local subscription_tmpfile
+	subscription_tmpfile="$TEMP_DIR/$subscription_section.yaml"
 	local subscription_info_file
-	local subscription_file; subscription_file="$SUBSCRIPTIONS_DIR/$subscription_section.yaml"
+	local subscription_file
+	subscription_file="$SUBSCRIPTIONS_DIR/$subscription_section.yaml"
 	# fetch subscription info
 	if [ -n "$subscription_info_url" ]; then
 		log "Profile" "Fetch subscription info."

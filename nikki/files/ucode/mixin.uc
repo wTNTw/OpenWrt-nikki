@@ -4,7 +4,7 @@
 
 import { cursor } from 'uci';
 import { connect } from 'ubus';
-import { uci_bool, uci_int, uci_array, trim_all } from '/etc/nikki/ucode/include.uc';
+import { uci_bool, uci_int, uci_array, trim_all, get_cgroups_version, get_uids } from '/etc/nikki/ucode/include.uc';
 
 const uci = cursor();
 const ubus = connect();
@@ -200,5 +200,240 @@ config['geox-url']['geoip'] = uci.get('nikki', 'mixin', 'geoip_dat_url');
 config['geox-url']['asn'] = uci.get('nikki', 'mixin', 'geoip_asn_url');
 config['geo-auto-update'] = uci_bool(uci.get('nikki', 'mixin', 'geox_auto_update'));
 config['geo-update-interval'] = uci_int(uci.get('nikki', 'mixin', 'geox_update_interval'));
+
+// eBPF 透明入站（需要带 with_ebpf 编译的 mihomo 内核）
+function ebpf_device_names(networks) {
+	const devices = [];
+
+	for (let name in networks) {
+		if (name == null || name == '' || index(devices, name) != -1) {
+			continue;
+		}
+		const status = ubus.call('network.interface', 'status', { 'interface': name });
+		const device = status?.l3_device ?? status?.device ?? name;
+		if (device != null && device != '' && index(devices, device) == -1) {
+			push(devices, device);
+		}
+	}
+
+	return devices;
+}
+
+// 本机流量接管方式：cgroup 优先（需要 cgroup v2），cgroupfs-mount 环境下退回 tc
+function ebpf_local_data_plane() {
+	const data_plane = uci.get('nikki', 'proxy', 'ebpf_data_plane');
+
+	if (data_plane == null || data_plane == '' || data_plane == 'auto') {
+		return get_cgroups_version() == 2 ? 'cgroup' : 'tc';
+	}
+
+	return data_plane;
+}
+
+function ebpf_dns_mode() {
+	const dns_mode = uci.get('nikki', 'proxy', 'ebpf_dns_mode');
+
+	if (dns_mode != null && dns_mode != '' && dns_mode != 'auto') {
+		return dns_mode;
+	}
+
+	return (uci_bool(uci.get('nikki', 'proxy', 'ipv4_dns_hijack')) ||
+		uci_bool(uci.get('nikki', 'proxy', 'ipv6_dns_hijack'))) ? 'hijack' : 'off';
+}
+
+// 本机访问控制中 proxy 为 0 的用户名单转换为 uid 排除列表
+function ebpf_exclude_uids() {
+	const uids = [];
+
+	uci.foreach('nikki', 'router_access_control', (access_control) => {
+		if (!uci_bool(access_control['enabled']) || uci_bool(access_control['proxy'])) {
+			return;
+		}
+		for (let uid in get_uids(uci_array(access_control['user']))) {
+			if (index(uids, uid) == -1) {
+				push(uids, uid);
+			}
+		}
+	});
+
+	return uids;
+}
+
+// 局域网访问控制转换为源地址/源 MAC 的包含或排除列表
+function ebpf_lan_filters() {
+	const exclude_ip = [], exclude_mac = [], include_ip = [], include_mac = [];
+	let catch_all = false, include = false;
+
+	uci.foreach('nikki', 'lan_access_control', (access_control) => {
+		if (!uci_bool(access_control['enabled'])) {
+			return;
+		}
+
+		const ip = uci_array(access_control['ip']);
+		const mac = uci_array(access_control['mac']);
+		push(ip, ...uci_array(access_control['ip6']));
+
+		if (length(ip) == 0 && length(mac) == 0) {
+			catch_all = true;
+			return;
+		}
+
+		if (uci_bool(access_control['proxy'])) {
+			include = true;
+			push(include_ip, ...ip);
+			push(include_mac, ...mac);
+		} else {
+			push(exclude_ip, ...ip);
+			push(exclude_mac, ...mac);
+		}
+	});
+
+	const result = {};
+
+	if (include && !catch_all) {
+		if (length(include_ip) > 0)
+			result['include-source-cidr'] = include_ip;
+		if (length(include_mac) > 0)
+			result['include-mac-address'] = include_mac;
+		return result;
+	}
+
+	if (length(exclude_ip) > 0)
+		result['exclude-source-cidr'] = exclude_ip;
+	if (length(exclude_mac) > 0)
+		result['exclude-mac-address'] = exclude_mac;
+
+	return result;
+}
+
+// 中国大陆 IP 直连：eBPF 数据面需要 rule-provider，自动生成一个 ipcidr 规则集
+function ebpf_bypass_rule_set() {
+	const rule_set = uci_array(uci.get('nikki', 'proxy', 'ebpf_bypass_rule_set'));
+
+	if (length(rule_set) > 0) {
+		return rule_set;
+	}
+
+	if (!uci_bool(uci.get('nikki', 'proxy', 'bypass_china_mainland_ip')) &&
+	    !uci_bool(uci.get('nikki', 'proxy', 'bypass_china_mainland_ip6'))) {
+		return [];
+	}
+
+	if (config['rule-providers'] == null) {
+		config['rule-providers'] = {};
+	}
+
+	config['rule-providers']['nikki-ebpf-cn-ip'] = {
+		type: 'http',
+		url: 'https://github.com/MetaCubeX/meta-rules-dat/raw/meta/geo/geoip/cn.mrs',
+		proxy: 'DIRECT',
+		format: 'mrs',
+		behavior: 'ipcidr',
+		interval: 86400,
+	};
+
+	return [ 'nikki-ebpf-cn-ip' ];
+}
+
+function ebpf_listener() {
+	const tcp = uci.get('nikki', 'proxy', 'tcp_mode') == 'ebpf';
+	const udp = uci.get('nikki', 'proxy', 'udp_mode') == 'ebpf';
+
+	if (!tcp && !udp) {
+		return null;
+	}
+
+	const local_enabled = uci_bool(uci.get('nikki', 'proxy', 'router_proxy'));
+	const shared_devices = ebpf_device_names(uci_array(uci.get('nikki', 'proxy', 'lan_inbound_interface')));
+	const shared_enabled = uci_bool(uci.get('nikki', 'proxy', 'lan_proxy')) && length(shared_devices) > 0;
+
+	if (!local_enabled && !shared_enabled) {
+		return null;
+	}
+
+	const network = [];
+
+	if (tcp)
+		push(network, 'tcp');
+	if (udp)
+		push(network, 'udp');
+
+	const ipv6 = uci_bool(uci.get('nikki', 'proxy', 'ipv6_proxy'));
+	const bypass_exclude = uci_array(uci.get('nikki', 'proxy', 'reserved_ip'));
+	push(bypass_exclude, ...uci_array(uci.get('nikki', 'proxy', 'reserved_ip6')));
+
+	if (!uci_bool(uci.get('nikki', 'proxy', 'ipv4_proxy'))) {
+		push(bypass_exclude, '0.0.0.0/0');
+	}
+
+	const listener = {
+		name: uci.get('nikki', 'core', 'ebpf_listener_name') ?? 'ebpf-in',
+		type: 'ebpf',
+		network: network,
+	};
+	const rule_set = ebpf_bypass_rule_set();
+
+	if (length(rule_set) > 0) {
+		listener['bypass-rule-set'] = rule_set;
+	}
+
+	if (uci_bool(uci.get('nikki', 'mixin', 'tun_enabled'))) {
+		listener['bypass-tun-direct'] = true;
+	}
+
+	const data_plane = local_enabled ? ebpf_local_data_plane() : null;
+	const dns_mode = ebpf_dns_mode();
+
+	if (local_enabled) {
+		const local = {
+			enable: true,
+			'data-plane': data_plane,
+			'dns-mode': dns_mode,
+			ipv6: ipv6,
+			'bypass-exclude': bypass_exclude,
+		};
+		const exclude_uid = ebpf_exclude_uids();
+
+		if (length(exclude_uid) > 0) {
+			local['exclude-uid'] = exclude_uid;
+		}
+
+		listener.local = local;
+	} else {
+		listener.local = { enable: false };
+	}
+
+	if (shared_enabled) {
+		const shared = {
+			enable: true,
+			'dns-mode': dns_mode,
+			ipv6: ipv6,
+			'interface': shared_devices,
+			'bypass-exclude': bypass_exclude,
+		};
+		const filters = ebpf_lan_filters();
+
+		for (let key, value in filters) {
+			shared[key] = value;
+		}
+
+		listener.shared = shared;
+	} else {
+		listener.shared = { enable: false };
+	}
+
+	if (uci_bool(uci.get('nikki', 'proxy', 'fake_ip_ping_hijack')) &&
+	    (shared_enabled || data_plane == 'tc')) {
+		listener['fakeip-icmp'] = 'reply';
+	}
+
+	return listener;
+}
+
+const ebpf = ebpf_listener();
+
+if (ebpf != null) {
+	config['nikki-listeners'] = [ ebpf ];
+}
 
 print(trim_all(config));

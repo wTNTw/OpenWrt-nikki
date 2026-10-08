@@ -39,12 +39,14 @@ return view.extend({
         o.value('redirect', _('Redirect Mode'));
         o.value('tproxy', _('TPROXY Mode'));
         o.value('tun', _('TUN Mode'));
+        o.value('ebpf', _('eBPF Mode'));
 
         o = s.taboption('proxy', form.ListValue, 'udp_mode', _('UDP Mode'));
         o.optional = true;
         o.placeholder = _('Disable');
         o.value('tproxy', _('TPROXY Mode'));
         o.value('tun', _('TUN Mode'));
+        o.value('ebpf', _('eBPF Mode'));
 
         o = s.taboption('proxy', form.Flag, 'ipv4_dns_hijack', _('IPv4 DNS Hijack'));
         o.rmempty = false;
@@ -60,6 +62,28 @@ return view.extend({
 
         o = s.taboption('proxy', form.Flag, 'fake_ip_ping_hijack', _('Fake-IP Ping Hijack'));
         o.rmempty = false;
+
+        s.tab('ebpf', _('eBPF Config'));
+
+        o = s.taboption('ebpf', form.ListValue, 'ebpf_data_plane', _('Local Data Plane'));
+        o.description = _('Data plane used to take over the router\'s own traffic, auto uses cgroup when cgroup v2 is available.');
+        o.optional = true;
+        o.placeholder = _('Auto');
+        o.value('auto', _('Auto'));
+        o.value('cgroup', _('CGroup'));
+        o.value('tc', _('TC'));
+
+        o = s.taboption('ebpf', form.ListValue, 'ebpf_dns_mode', _('DNS Mode'));
+        o.description = _('auto hijacks DNS when IPv4/IPv6 DNS Hijack is enabled.');
+        o.optional = true;
+        o.placeholder = _('Auto');
+        o.value('auto', _('Auto'));
+        o.value('hijack', _('Hijack'));
+        o.value('respect_policy', _('Respect Policy'));
+        o.value('off', _('Off'));
+
+        o = s.taboption('ebpf', form.DynamicList, 'ebpf_bypass_rule_set', _('Bypass Rule Set'));
+        o.description = _('Rule provider tags whose IP CIDRs are bypassed, a CN IP rule set is generated when Bypass China Mainland IP is enabled.');
 
         s.tab('router', _('Router Proxy'));
 
