@@ -1,53 +1,182 @@
 name: build-packages-manual
 
+# Builds the nikki / luci-app-nikki packages (plus the LuCI translations)
+# straight from the OpenWrt SDK, *without* compiling the mihomo core.
+# The mihomo core is downloaded separately from
+# https://github.com/liuran001/mihomo and installed alongside these packages.
+#
+# Why not openwrt/gh-action-sdk: that action runs `make defconfig` on a fresh
+# (empty) .config, so there is no way to enable the LuCI language selectors
+# (CONFIG_LUCI_LANG_*) that gate luci-i18n-nikki-*.  It also picks up the
+# mihomo-alpha / mihomo-meta build recipes as dependencies of `nikki` and
+# therefore always compiles a full mihomo core.  Both is done manually below.
+
 on:
   workflow_dispatch:
     inputs:
+      sdk_url:
+        description: OpenWrt SDK tarball URL
+        required: true
+        default: https://downloads.openwrt.org/releases/25.12.5/targets/armsr/armv8/openwrt-sdk-25.12.5-armsr-armv8_gcc-14.3.0_musl.Linux-x86_64.tar.zst
       arch:
-        description: Package architecture (e.g. aarch64_generic)
+        description: Package architecture / ARCH_PACKAGES of the SDK
         required: true
         default: aarch64_generic
       branch:
-        description: OpenWrt branch (e.g. openwrt-25.12)
+        description: OpenWrt branch (only used for the artifact name)
         required: true
         default: openwrt-25.12
       packages:
-        description: Packages to compile, space separated (default skips the mihomo core)
+        description: Package directories to compile, space separated
         required: true
         default: nikki luci-app-nikki
       feedname:
-        description: Feed name
+        description: Feed name of this repository
         required: true
         default: nikki
 
 jobs:
   build:
     name: ${{ inputs.arch }}-${{ inputs.branch }} build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: checkout
         uses: actions/checkout@v6
 
-      - name: build
-        uses: openwrt/gh-action-sdk@main
-        env:
-          ARCH: ${{ inputs.arch }}-${{ inputs.branch }}
-          FEEDNAME: ${{ inputs.feedname }}
-          PACKAGES: ${{ inputs.packages }}
-          NO_REFRESH_CHECK: true
-          NO_SHFMT_CHECK: true
+      - name: install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison gawk gettext git libncurses-dev \
+            libssl-dev rsync unzip zlib1g-dev file wget zstd bzip2 patch perl \
+            python3 python3-dev python3-setuptools subversion time xsltproc
+
+      # The nikki package depends on `mihomo` (provided by mihomo-alpha /
+      # mihomo-meta).  Replace those recipes with a tiny placeholder so that
+      # the core is *not* compiled here.
+      - name: replace mihomo core recipes with a placeholder
+        run: |
+          set -e
+          rm -rf mihomo-alpha mihomo-meta
+          mkdir -p mihomo
+          cat > mihomo/Makefile <<'MAKEFILE_EOF'
+          include $(TOPDIR)/rules.mk
+
+          PKG_NAME:=mihomo
+          PKG_VERSION:=0.0.0
+          PKG_RELEASE:=1
+          PKG_LICENSE:=MIT
+          PKG_MAINTAINER:=local-build-stub
+
+          include $(INCLUDE_DIR)/package.mk
+
+          define Package/mihomo
+            SECTION:=net
+            CATEGORY:=Network
+            TITLE:=mihomo (local build stub - install the real core separately)
+          endef
+
+          define Build/Compile
+          endef
+
+          define Package/mihomo/install
+          	$(INSTALL_DIR) $(1)/usr/share/mihomo-stub
+          endef
+
+          $(eval $(call BuildPackage,mihomo))
+          MAKEFILE_EOF
+          cat mihomo/Makefile
+
+      - name: download and extract SDK
+        run: |
+          set -e
+          sudo mkdir -p /sdk
+          sudo chown "$(id -u):$(id -g)" /sdk
+          curl -fL --retry 3 --retry-delay 5 -o sdk.tar.zst '${{ inputs.sdk_url }}'
+          ls -la sdk.tar.zst
+          tar --zstd -xf sdk.tar.zst -C /sdk --strip-components=1
+          rm -f sdk.tar.zst
+          ls /sdk
+
+      - name: update and install feeds
+        working-directory: /sdk
+        run: |
+          set -e
+          cp feeds.conf.default feeds.conf
+          echo "src-link ${{ inputs.feedname }} $GITHUB_WORKSPACE" >> feeds.conf
+          cat feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      # luci.mk gates the luci-i18n-<app>-<lang> packages behind the
+      # CONFIG_LUCI_LANG_* selectors, so they have to be enabled explicitly.
+      - name: configure
+        working-directory: /sdk
+        run: |
+          set -e
+          cat > .config <<'CONFIG_EOF'
+          # CONFIG_ALL is not set
+          # CONFIG_ALL_KMODS is not set
+          # CONFIG_ALL_NONSHARED is not set
+          CONFIG_LUCI_LANG_zh_Hans=y
+          CONFIG_LUCI_LANG_zh_Hant=y
+          CONFIG_LUCI_LANG_ru=y
+          CONFIG_PACKAGE_luci-app-nikki=y
+          CONFIG_PACKAGE_nikki=y
+          CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
+          CONFIG_PACKAGE_luci-i18n-nikki-zh-tw=y
+          CONFIG_PACKAGE_luci-i18n-nikki-ru=y
+          CONFIG_EOF
+          make defconfig
+          echo '--- resulting selection ---'
+          grep -E 'CONFIG_PACKAGE_(nikki|luci-app-nikki|luci-i18n-nikki)|CONFIG_LUCI_LANG_' .config
+
+      - name: build packages
+        working-directory: /sdk
+        run: |
+          set -o pipefail
+          targets=""
+          for p in ${{ inputs.packages }}; do
+            targets="$targets package/$p/compile"
+          done
+          echo "targets:$targets"
+          make -j"$(nproc)" $targets > /tmp/build.log 2>&1 || {
+            echo "===== build failed, last 200 lines ====="
+            tail -200 /tmp/build.log
+            exit 1
+          }
+          tail -40 /tmp/build.log
+          echo '--- produced packages ---'
+          ls -la "bin/packages/${{ inputs.arch }}/${{ inputs.feedname }}/"
+
+      - name: check translations
+        working-directory: /sdk
+        run: |
+          for p in luci-i18n-nikki-zh-cn luci-i18n-nikki-zh-tw luci-i18n-nikki-ru; do
+            if compgen -G "bin/packages/${{ inputs.arch }}/${{ inputs.feedname }}/${p}*.apk" > /dev/null; then
+              echo "OK   $p"
+            else
+              echo "MISS $p"
+            fi
+          done
 
       - name: pack tarball
         if: always()
         run: |
           set -x
           ARCH='${{ inputs.arch }}'
+          FEED='${{ inputs.feedname }}'
           BRANCH='${{ inputs.branch }}'
           OUT="nikki_${ARCH}-${BRANCH}.tar.gz"
-          ls -la
-          ls -la "bin/packages/${ARCH}/" || true
-          if [ -d "bin/packages/${ARCH}/nikki" ]; then
-            tar -czf "$OUT" -C "bin/packages/${ARCH}" nikki
+          SRC="bin/packages/${ARCH}/${FEED}"
+          ls -la /sdk/"bin/packages/${ARCH}/" || true
+          rm -rf dist
+          mkdir -p dist/${FEED}
+          if [ -d "/sdk/${SRC}" ]; then
+            find "/sdk/${SRC}" -maxdepth 1 -name '*.apk' ! -name 'mihomo*' \
+              -exec cp -p {} "dist/${FEED}/" \;
+            tar -czf "$OUT" -C dist "${FEED}"
+            tar -tzf "$OUT"
             ls -la "$OUT"
           fi
 
@@ -56,6 +185,6 @@ jobs:
         with:
           name: nikki_${{ inputs.arch }}-${{ inputs.branch }}
           path: |
-            bin/packages/${{ inputs.arch }}/nikki
+            dist/${{ inputs.feedname }}
             nikki_${{ inputs.arch }}-${{ inputs.branch }}.tar.gz
           if-no-files-found: warn
