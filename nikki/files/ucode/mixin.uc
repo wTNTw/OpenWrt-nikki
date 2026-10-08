@@ -359,12 +359,11 @@ function ebpf_listener() {
 		push(network, 'udp');
 
 	const ipv6 = uci_bool(uci.get('nikki', 'proxy', 'ipv6_proxy'));
-	const bypass_exclude = uci_array(uci.get('nikki', 'proxy', 'reserved_ip'));
-	push(bypass_exclude, ...uci_array(uci.get('nikki', 'proxy', 'reserved_ip6')));
-
-	if (!uci_bool(uci.get('nikki', 'proxy', 'ipv4_proxy'))) {
-		push(bypass_exclude, '0.0.0.0/0');
-	}
+	// mihomo 的 bypass-exclude 是"强制拦截(force-intercept)"列表, 不是"绕过"列表:
+	// sing_ebpf 会把这些前缀从 bypass 集合中剔除(excludeForcedPrefixes), 即一定劫持.
+	// 放 reserved_ip 会导致局域网/回环/多播等目的地被强制劫持,
+	// 破坏 LAN 客户端访问路由器自身服务(例如 docker 发布的端口). 故此处留空.
+	const bypass_exclude = [];
 
 	const listener = {
 		name: uci.get('nikki', 'core', 'ebpf_listener_name') ?? 'ebpf-in',
