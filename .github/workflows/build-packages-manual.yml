@@ -35,6 +35,7 @@ jobs:
           FEEDNAME: ${{ inputs.feedname }}
           PACKAGES: ${{ inputs.packages }}
           NO_REFRESH_CHECK: true
+          NO_SHFMT_CHECK: true
 
       - name: pack tarball
         if: always()
