@@ -283,6 +283,21 @@ start_service() {
 	procd_append_param env SKIP_SYSTEM_IPV6_CHECK="$env_skip_system_ipv6_check"
 
 	procd_close_instance
+	# start resource watchdog
+	# keeps the RAM backed logs bounded and restarts the core if it ever runs
+	# away with the memory, see scripts/watchdog.sh
+	local watchdog_enabled
+	config_get_bool watchdog_enabled "watchdog" "enabled" 1
+	if [ "$watchdog_enabled" = 1 ]; then
+		procd_open_instance watchdog
+
+		procd_set_param command /bin/sh "$WATCHDOG_SH"
+		procd_set_param respawn
+		procd_set_param stdout 0
+		procd_set_param stderr 0
+
+		procd_close_instance
+	fi
 	# cron
 	local reload_cron; reload_cron=0
 	## clear cron
@@ -582,7 +597,9 @@ cleanup() {
 		sysctl -q -w net.bridge.bridge-nf-call-ip6tables=1
 	fi
 	# revert eBPF accept_local — only if nikki was the one that set it
-	rm "$ACCEPT_LOCAL_FLAG_PATH" > /dev/null 2>&1
+	if rm "$ACCEPT_LOCAL_FLAG_PATH" > /dev/null 2>&1; then
+		set_ebpf_accept_local 0
+	fi
 	# restore flow_offloading if nikki disabled it
 	if rm "$FLOW_OFFLOADING_FLAG_PATH" > /dev/null 2>&1; then
 		uci -q set firewall.@defaults[0].flow_offloading='1'
@@ -600,32 +617,16 @@ clear_logs() {
 	# load config
 	config_load nikki
 	# get config
-	## log config
-	local log_scheduled_clear_size_limit log_scheduled_clear_size_limit_unit
-	config_get log_scheduled_clear_size_limit "log" "scheduled_clear_size_limit" 1
-	config_get log_scheduled_clear_size_limit_unit "log" "scheduled_clear_size_limit_unit" "MB"
-	# prepare config
-	local log_scheduled_clear_size_limit_in_bytes; log_scheduled_clear_size_limit_in_bytes=0
-	case "$log_scheduled_clear_size_limit_unit" in
-		B)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit))
-		;;
-		KB)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024))
-		;;
-		MB)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024 * 1024))
-		;;
-		GB)
-			log_scheduled_clear_size_limit_in_bytes=$((log_scheduled_clear_size_limit * 1024 * 1024 * 1024))
-		;;
-	esac
+	local log_size_limit_in_bytes; log_size_limit_in_bytes=$(get_log_size_limit_bytes)
+	if [ "$log_size_limit_in_bytes" -le 0 ]; then
+		return
+	fi
 	# clear logs
-	if [ -f "$APP_LOG_PATH" ] && [ "$(wc -c < "$APP_LOG_PATH")" -ge "$log_scheduled_clear_size_limit_in_bytes" ]; then
+	if [ -f "$APP_LOG_PATH" ] && [ "$(wc -c < "$APP_LOG_PATH")" -ge "$log_size_limit_in_bytes" ]; then
 		echo -n > "$APP_LOG_PATH"
 		log "Log" "App log is cleared due to scheduled clear and exceeding size limits."
 	fi
-	if [ -f "$CORE_LOG_PATH" ] && [ "$(wc -c < "$CORE_LOG_PATH")" -ge "$log_scheduled_clear_size_limit_in_bytes" ]; then
+	if [ -f "$CORE_LOG_PATH" ] && [ "$(wc -c < "$CORE_LOG_PATH")" -ge "$log_size_limit_in_bytes" ]; then
 		echo -n > "$CORE_LOG_PATH"
 		log "Log" "Core log is cleared due to scheduled clear and exceeding size limits."
 	fi

@@ -18,7 +18,7 @@ return view.extend({
         const appLog = data[1];
         const coreLog = data[2];
 
-        let m, s, o;
+        let m, s, w, o;
 
         m = new form.Map('nikki');
 
@@ -116,6 +116,47 @@ return view.extend({
             const element = m.lookupOption('_core_log', section_id)[0].getUIElement(section_id).node.firstChild;
             element.scrollTop = element.scrollHeight;
         };
+
+        w = m.section(form.NamedSection, 'watchdog', 'watchdog', _('Watchdog'));
+
+        w.tab('watchdog', _('Watchdog'));
+
+        o = w.taboption('watchdog', form.Flag, 'enabled', _('Enable Watchdog'));
+        o.rmempty = false;
+        o.description = _('Keeps the logs within the size limit and restarts the core if it uses too much memory. On OpenWrt the logs live in RAM (tmpfs), so an unbounded log can exhaust memory and take the router offline.');
+
+        o = w.taboption('watchdog', form.Value, 'interval', _('Interval'));
+        o.datatype = 'uinteger';
+        o.placeholder = '30';
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Check interval in seconds.');
+
+        o = w.taboption('watchdog', form.Flag, 'log_size_guard', _('Log Size Guard'));
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Truncate the logs as soon as they exceed the scheduled clear size limit.');
+
+        o = w.taboption('watchdog', form.Value, 'mem_limit', _('Core Memory Limit'));
+        o.datatype = 'uinteger';
+        o.placeholder = '0';
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Restart the core when its resident memory stays above this many MB. 0 = auto (60% of the total RAM).');
+
+        o = w.taboption('watchdog', form.Value, 'mem_available_floor', _('Available Memory Floor'));
+        o.datatype = 'uinteger';
+        o.placeholder = '10';
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Restart the core when the share of available system memory falls to this percentage. 0 disables the check.');
+
+        o = w.taboption('watchdog', form.Value, 'mem_over_count', _('Core Memory Over Count'));
+        o.datatype = 'uinteger';
+        o.placeholder = '3';
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Number of consecutive checks above the limit before the core is restarted.');
 
         s.tab('debug_log', _('Debug Log'));
 

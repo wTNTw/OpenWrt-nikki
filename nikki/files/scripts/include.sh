@@ -35,6 +35,13 @@ HIJACK_UT="$UCODE_DIR/hijack.ut"
 SH_DIR="$HOME_DIR/scripts"
 INCLUDE_SH="$SH_DIR/include.sh"
 FIREWALL_INCLUDE_SH="$SH_DIR/firewall_include.sh"
+WATCHDOG_SH="$SH_DIR/watchdog.sh"
+
+# persistent (non tmpfs) record of watchdog alarms
+WATCHDOG_LOG_PATH="$HOME_DIR/watchdog.log"
+
+# core
+CORE_PROC_NAME="mihomo"
 
 # nftables
 NFT_DIR="$HOME_DIR/nftables"
@@ -84,6 +91,43 @@ prepare_files() {
 
 log() {
 	echo "[$(date "+%Y-%m-%d %H:%M:%S")] [$1] $2" >> "$APP_LOG_PATH"
+}
+
+# Convert the configured log size limit into bytes.
+# Honours "log.scheduled_clear_size_limit" + "log.scheduled_clear_size_limit_unit".
+get_log_size_limit_bytes() {
+	local limit unit
+	config_get limit "log" "scheduled_clear_size_limit" 1
+	config_get unit "log" "scheduled_clear_size_limit_unit" "MB"
+	case "$unit" in
+		B) echo "$((limit))" ;;
+		KB) echo "$((limit * 1024))" ;;
+		MB) echo "$((limit * 1024 * 1024))" ;;
+		GB) echo "$((limit * 1024 * 1024 * 1024))" ;;
+		*) echo "0" ;;
+	esac
+}
+
+# Total RAM in MB.
+get_mem_total_mb() {
+	awk '/^MemTotal:/ { printf "%d", $2 / 1024 }' /proc/meminfo
+}
+
+# Share of the total RAM the kernel still considers available, in percent.
+get_mem_available_pct() {
+	awk '/^MemAvailable:/ { a = $2 } /^MemTotal:/ { t = $2 } END { if (t > 0) printf "%d", a * 100 / t }' /proc/meminfo
+}
+
+# Resident memory (MB) of a pid, empty if the process is gone.
+get_pid_rss_mb() {
+	local pid; pid="$1"
+	[ -n "$pid" ] && [ -r "/proc/$pid/status" ] || return
+	awk '/^VmRSS:/ { printf "%d", $2 / 1024 }' "/proc/$pid/status"
+}
+
+# pid of the running core, empty if not running.
+get_core_pid() {
+	pidof "$CORE_PROC_NAME" 2>/dev/null | awk '{print $1}'
 }
 
 # eBPF shared (LAN proxy) data-plane rewrites destination addresses into the

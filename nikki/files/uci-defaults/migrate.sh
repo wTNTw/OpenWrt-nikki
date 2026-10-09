@@ -229,6 +229,18 @@ log_scheduled_clear_size_limit_unit=$(uci -q get nikki.log.scheduled_clear_size_
 
 config_clear_at_stop=$(uci -q get nikki.log.clear_at_stop); [ -z "$config_clear_at_stop" ] && uci set nikki.log.clear_at_stop=1
 
+# since v2026.04.08-r2
+
+section_watchdog=$(uci -q get nikki.watchdog); [ -z "$section_watchdog" ] && {
+	uci set nikki.watchdog=watchdog
+	uci set nikki.watchdog.enabled=1
+	uci set nikki.watchdog.interval=30
+	uci set nikki.watchdog.log_size_guard=1
+	uci set nikki.watchdog.mem_limit=0
+	uci set nikki.watchdog.mem_available_floor=10
+	uci set nikki.watchdog.mem_over_count=3
+}
+
 # commit
 uci commit nikki
 
