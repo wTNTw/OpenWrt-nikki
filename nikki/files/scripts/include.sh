@@ -22,6 +22,8 @@ PID_FILE_PATH="$TEMP_DIR/nikki.pid"
 STARTED_FLAG_PATH="$TEMP_DIR/started.flag"
 BRIDGE_NF_CALL_IPTABLES_FLAG_PATH="$TEMP_DIR/bridge_nf_call_iptables.flag"
 BRIDGE_NF_CALL_IP6TABLES_FLAG_PATH="$TEMP_DIR/bridge_nf_call_ip6tables.flag"
+ACCEPT_LOCAL_FLAG_PATH="$TEMP_DIR/accept_local.flag"
+FLOW_OFFLOADING_FLAG_PATH="$TEMP_DIR/flow_offloading.flag"
 
 # ucode
 UCODE_DIR="$HOME_DIR/ucode"
@@ -82,4 +84,24 @@ prepare_files() {
 
 log() {
 	echo "[$(date "+%Y-%m-%d %H:%M:%S")] [$1] $2" >> "$APP_LOG_PATH"
+}
+
+# eBPF shared (LAN proxy) data-plane rewrites destination addresses into the
+# 127.128.0.0/9 loopback-reserved range. The kernel treats packets in that
+# range arriving on a non-loopback interface (e.g. br-lan) as martian unless
+# accept_local is enabled. Writing to conf.all/conf.default only affects
+# interfaces that are created afterwards, so every interface that already
+# exists has to be set explicitly as well.
+set_ebpf_accept_local() {
+	local value; value="$1"
+	sysctl -q -w net.ipv4.conf.all.accept_local="$value"
+	sysctl -q -w net.ipv4.conf.default.accept_local="$value"
+	local iface
+	for iface in /proc/sys/net/ipv4/conf/*; do
+		iface="${iface##*/}"
+		[ "$iface" = "all" ] && continue
+		[ "$iface" = "default" ] && continue
+		[ "$iface" = "lo" ] && continue
+		sysctl -q -w "net.ipv4.conf.$iface.accept_local=$value" > /dev/null 2>&1
+	done
 }

@@ -468,6 +468,38 @@ service_started() {
 			if [ "$ebpf_router_proxy" = 0 ] && [ "$ebpf_lan_proxy" = 0 ]; then
 				log "Proxy" "eBPF mode requires Router Proxy or LAN Proxy to be enabled."
 			fi
+			# eBPF shared (LAN proxy) data-plane compatibility fixes
+			if [ "$ebpf_lan_proxy" = 1 ]; then
+				# accept_local: eBPF rewrites dst to 127.128.0.0/9; the kernel
+				# drops such packets arriving on non-loopback interfaces unless
+				# accept_local=1.  conf.all/default don't backfill existing ifaces.
+				local accept_local; accept_local=$(sysctl -e -n net.ipv4.conf.all.accept_local)
+				if [ "$accept_local" != "1" ]; then
+					touch "$ACCEPT_LOCAL_FLAG_PATH"
+					set_ebpf_accept_local 1
+					log "Proxy" "eBPF: set accept_local=1 on all interfaces."
+				fi
+				# flow_offloading: bypasses TC egress hook so eBPF cannot
+				# rewrite reply packet source addresses.
+				local flow_offloading
+				flow_offloading=$(uci -q get firewall.@defaults[0].flow_offloading)
+				if [ "$flow_offloading" = "1" ]; then
+					log "Proxy" "eBPF: flow_offloading enabled — disabling for eBPF compatibility."
+					touch "$FLOW_OFFLOADING_FLAG_PATH"
+					uci -q set firewall.@defaults[0].flow_offloading='0'
+					uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+					uci -q commit firewall
+					fw4 reload > /dev/null 2>&1
+					# Re-apply after fw4 reload (fw4 does not touch sysctl but
+					# this keeps the order defensive).
+					set_ebpf_accept_local 1
+				else
+					# No reload needed — insert nft rules directly now.
+					# firewall_include.sh also runs on every future fw4 reload
+					# so the rules are re-inserted automatically.
+					$FIREWALL_INCLUDE_SH
+				fi
+			fi
 		fi
 		# hijack
 		utpl -S "$HIJACK_UT" | nft -f -
@@ -535,6 +567,10 @@ cleanup() {
 	for handle in $handles; do
 		nft delete rule inet fw4 forward handle "$handle"
 	done
+	handles=$(nft --json list table inet fw4 | jsonfilter -q -e "@['nftables'][*]['rule']" | jsonfilter -q -a -e "@[@['chain']='output']" | jsonfilter -q -a -e "@[@['comment']='nikki']" | jsonfilter -q -a -e "@[*]['handle']")
+	for handle in $handles; do
+		nft delete rule inet fw4 output handle "$handle"
+	done
 	# delete started flag
 	rm "$STARTED_FLAG_PATH" > /dev/null 2>&1
 	# revert fix compatible with dockerd
@@ -544,6 +580,14 @@ cleanup() {
 	fi
 	if rm "$BRIDGE_NF_CALL_IP6TABLES_FLAG_PATH" > /dev/null 2>&1; then
 		sysctl -q -w net.bridge.bridge-nf-call-ip6tables=1
+	fi
+	# revert eBPF accept_local — only if nikki was the one that set it
+	rm "$ACCEPT_LOCAL_FLAG_PATH" > /dev/null 2>&1
+	# restore flow_offloading if nikki disabled it
+	if rm "$FLOW_OFFLOADING_FLAG_PATH" > /dev/null 2>&1; then
+		uci -q set firewall.@defaults[0].flow_offloading='1'
+		uci -q commit firewall
+		fw4 reload > /dev/null 2>&1
 	fi
 	# delete cron
 	if grep -q "#nikki" "/etc/crontabs/root"; then
