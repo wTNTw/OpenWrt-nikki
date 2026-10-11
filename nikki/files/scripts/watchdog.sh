@@ -28,11 +28,11 @@ config_load nikki
 config_get_bool wd_enabled "watchdog" "enabled" 1
 [ "$wd_enabled" = 1 ] || exit 0
 
-config_get wd_interval "watchdog" "interval" 30
+config_get wd_interval "watchdog" "interval" 10
 config_get_bool wd_log_guard "watchdog" "log_size_guard" 1
 config_get wd_mem_limit "watchdog" "mem_limit" 0
 config_get wd_mem_floor "watchdog" "mem_available_floor" 25
-config_get wd_mem_over_count "watchdog" "mem_over_count" 3
+config_get wd_mem_over_count "watchdog" "mem_over_count" 2
 
 # Alarms go to the normal app log plus a persistent file, so that they survive
 # the reboot that a memory exhaustion usually ends with.
@@ -42,7 +42,7 @@ guard_log() {
 }
 
 case "$wd_interval" in
-	''|*[!0-9]*) wd_interval=30 ;;
+	''|*[!0-9]*) wd_interval=10 ;;
 esac
 if [ "$wd_interval" -lt 5 ]; then
 	wd_interval=5
@@ -57,21 +57,26 @@ case "$wd_mem_floor" in
 esac
 
 case "$wd_mem_over_count" in
-	''|*[!0-9]*) wd_mem_over_count=3 ;;
+	''|*[!0-9]*) wd_mem_over_count=2 ;;
 esac
 if [ "$wd_mem_over_count" -lt 1 ]; then
 	wd_mem_over_count=1
 fi
 
-# 0 means "auto": 60% of total RAM, but never more than 1024 MB. A healthy core
-# settles around 150-250 MB, so the cap still leaves an order of magnitude of
-# headroom while stopping a runaway core long before it has eaten the whole box.
-# Without the cap a 4 GB router would allow ~2.4 GB, which is past the point
-# where the rest of the system (DNS, AdGuard, docker) has room left to work -
-# that is how the core was able to push MemAvailable down into double digits.
-wd_mem_limit_auto_cap=1024
+# 0 means "auto": 40% of total RAM, but never more than 800 MB. A healthy core
+# settles around 150-250 MB, so this still leaves generous headroom while
+# stopping a runaway core long before it has eaten the whole box.
+#
+# Measured on a 4 GB router: during a connection storm (open sockets went from
+# 100 to 11352 in five minutes) the core grew 212 MB -> 2893 MB at roughly
+# 680 MB/min. With the old 60%/no-cap default it first tripped the watchdog at
+# 3369 MB - by then the kernel was swapping into zram, the CPU was saturated
+# and DHCP/DNS had already stopped answering, so the router had to be reset
+# twice by the hardware watchdog. Reacting at 800 MB and checking every 10s
+# instead of 30s turns that into a plain core restart.
+wd_mem_limit_auto_cap=800
 if [ "$wd_mem_limit" -le 0 ]; then
-	wd_mem_limit=$(( $(get_mem_total_mb) * 60 / 100 ))
+	wd_mem_limit=$(( $(get_mem_total_mb) * 40 / 100 ))
 	[ "$wd_mem_limit" -gt "$wd_mem_limit_auto_cap" ] && wd_mem_limit=$wd_mem_limit_auto_cap
 fi
 

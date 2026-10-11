@@ -127,7 +127,7 @@ return view.extend({
 
         o = w.taboption('watchdog', form.Value, 'interval', _('Interval'));
         o.datatype = 'uinteger';
-        o.placeholder = '30';
+        o.placeholder = '10';
         o.rmempty = false;
         o.depends('enabled', '1');
         o.description = _('Check interval in seconds.');
@@ -142,7 +142,7 @@ return view.extend({
         o.placeholder = '0';
         o.rmempty = false;
         o.depends('enabled', '1');
-        o.description = _('Restart the core when its resident memory stays above this many MB. 0 = auto (60% of the total RAM, capped at 1024 MB).');
+        o.description = _('Restart the core when its resident memory stays above this many MB. 0 = auto (40% of the total RAM, capped at 800 MB).');
 
         o = w.taboption('watchdog', form.Value, 'mem_available_floor', _('Available Memory Floor'));
         o.datatype = 'uinteger';
@@ -153,7 +153,7 @@ return view.extend({
 
         o = w.taboption('watchdog', form.Value, 'mem_over_count', _('Core Memory Over Count'));
         o.datatype = 'uinteger';
-        o.placeholder = '3';
+        o.placeholder = '2';
         o.rmempty = false;
         o.depends('enabled', '1');
         o.description = _('Number of consecutive checks above the limit before the core is restarted.');
