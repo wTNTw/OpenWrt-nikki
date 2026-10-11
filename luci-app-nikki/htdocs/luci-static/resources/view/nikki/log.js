@@ -142,11 +142,11 @@ return view.extend({
         o.placeholder = '0';
         o.rmempty = false;
         o.depends('enabled', '1');
-        o.description = _('Restart the core when its resident memory stays above this many MB. 0 = auto (60% of the total RAM).');
+        o.description = _('Restart the core when its resident memory stays above this many MB. 0 = auto (60% of the total RAM, capped at 1024 MB).');
 
         o = w.taboption('watchdog', form.Value, 'mem_available_floor', _('Available Memory Floor'));
         o.datatype = 'uinteger';
-        o.placeholder = '10';
+        o.placeholder = '25';
         o.rmempty = false;
         o.depends('enabled', '1');
         o.description = _('Restart the core when the share of available system memory falls to this percentage. 0 disables the check.');

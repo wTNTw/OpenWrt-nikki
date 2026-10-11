@@ -237,9 +237,21 @@ section_watchdog=$(uci -q get nikki.watchdog); [ -z "$section_watchdog" ] && {
 	uci set nikki.watchdog.interval=30
 	uci set nikki.watchdog.log_size_guard=1
 	uci set nikki.watchdog.mem_limit=0
-	uci set nikki.watchdog.mem_available_floor=10
+	uci set nikki.watchdog.mem_available_floor=25
 	uci set nikki.watchdog.mem_over_count=3
 }
+
+# since v2026.04.08-r3
+#
+# r2 shipped a mem_available_floor of 10% and an uncapped "auto" mem_limit
+# (60% of RAM). Both proved far too permissive: on a 4 GB router that allowed
+# the core to reach ~2.4 GB and pushed MemAvailable down to double digit MB
+# before the watchdog intervened, which is already enough to stall DNS and the
+# whole data plane. The auto limit is now capped at 1024 MB in watchdog.sh and
+# the floor is raised to 25%. Only installs still carrying the old default are
+# touched, so a deliberately chosen value is preserved.
+mem_available_floor=$(uci -q get nikki.watchdog.mem_available_floor)
+[ "$mem_available_floor" = "10" ] && uci set nikki.watchdog.mem_available_floor=25
 
 # commit
 uci commit nikki

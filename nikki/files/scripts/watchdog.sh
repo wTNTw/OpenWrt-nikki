@@ -31,7 +31,7 @@ config_get_bool wd_enabled "watchdog" "enabled" 1
 config_get wd_interval "watchdog" "interval" 30
 config_get_bool wd_log_guard "watchdog" "log_size_guard" 1
 config_get wd_mem_limit "watchdog" "mem_limit" 0
-config_get wd_mem_floor "watchdog" "mem_available_floor" 10
+config_get wd_mem_floor "watchdog" "mem_available_floor" 25
 config_get wd_mem_over_count "watchdog" "mem_over_count" 3
 
 # Alarms go to the normal app log plus a persistent file, so that they survive
@@ -53,7 +53,7 @@ case "$wd_mem_limit" in
 esac
 
 case "$wd_mem_floor" in
-	''|*[!0-9]*) wd_mem_floor=10 ;;
+	''|*[!0-9]*) wd_mem_floor=25 ;;
 esac
 
 case "$wd_mem_over_count" in
@@ -63,10 +63,16 @@ if [ "$wd_mem_over_count" -lt 1 ]; then
 	wd_mem_over_count=1
 fi
 
-# 0 means "auto": 60% of total RAM, which is generous for a healthy core but
-# still leaves the router usable if the core ever runs away.
+# 0 means "auto": 60% of total RAM, but never more than 1024 MB. A healthy core
+# settles around 150-250 MB, so the cap still leaves an order of magnitude of
+# headroom while stopping a runaway core long before it has eaten the whole box.
+# Without the cap a 4 GB router would allow ~2.4 GB, which is past the point
+# where the rest of the system (DNS, AdGuard, docker) has room left to work -
+# that is how the core was able to push MemAvailable down into double digits.
+wd_mem_limit_auto_cap=1024
 if [ "$wd_mem_limit" -le 0 ]; then
 	wd_mem_limit=$(( $(get_mem_total_mb) * 60 / 100 ))
+	[ "$wd_mem_limit" -gt "$wd_mem_limit_auto_cap" ] && wd_mem_limit=$wd_mem_limit_auto_cap
 fi
 
 log "Watchdog" "Started (interval=${wd_interval}s, log_size_guard=$wd_log_guard, mem_limit=${wd_mem_limit}MB, mem_available_floor=${wd_mem_floor}%, mem_over_count=$wd_mem_over_count)."
