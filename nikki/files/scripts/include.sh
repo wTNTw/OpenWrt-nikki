@@ -130,6 +130,17 @@ get_core_pid() {
 	pidof "$CORE_PROC_NAME" 2>/dev/null | awk '{print $1}'
 }
 
+# Number of socket file descriptors a pid currently holds, empty if the process
+# is gone. A healthy core sits at 100-200; this is the earliest warning sign we
+# have, because a connection storm opens sockets long before the heap follows.
+# Measured: 100 -> 11352 sockets in five minutes, while RSS was still only
+# 430 MB and conntrack had gone 1597 -> 25281.
+get_pid_socket_count() {
+	local pid; pid="$1"
+	[ -n "$pid" ] && [ -d "/proc/$pid/fd" ] || return
+	ls -l "/proc/$pid/fd" 2>/dev/null | grep -c "socket:"
+}
+
 # eBPF shared (LAN proxy) data-plane rewrites destination addresses into the
 # 127.128.0.0/9 loopback-reserved range. The kernel treats packets in that
 # range arriving on a non-loopback interface (e.g. br-lan) as martian unless

@@ -33,6 +33,8 @@ config_get_bool wd_log_guard "watchdog" "log_size_guard" 1
 config_get wd_mem_limit "watchdog" "mem_limit" 0
 config_get wd_mem_floor "watchdog" "mem_available_floor" 25
 config_get wd_mem_over_count "watchdog" "mem_over_count" 2
+config_get wd_socket_limit "watchdog" "socket_limit" 0
+config_get wd_socket_over_count "watchdog" "socket_over_count" 1
 
 # Alarms go to the normal app log plus a persistent file, so that they survive
 # the reboot that a memory exhaustion usually ends with.
@@ -63,6 +65,17 @@ if [ "$wd_mem_over_count" -lt 1 ]; then
 	wd_mem_over_count=1
 fi
 
+case "$wd_socket_limit" in
+	''|*[!0-9]*) wd_socket_limit=0 ;;
+esac
+
+case "$wd_socket_over_count" in
+	''|*[!0-9]*) wd_socket_over_count=1 ;;
+esac
+if [ "$wd_socket_over_count" -lt 1 ]; then
+	wd_socket_over_count=1
+fi
+
 # 0 means "auto": 40% of total RAM, but never more than 800 MB. A healthy core
 # settles around 150-250 MB, so this still leaves generous headroom while
 # stopping a runaway core long before it has eaten the whole box.
@@ -80,15 +93,28 @@ if [ "$wd_mem_limit" -le 0 ]; then
 	[ "$wd_mem_limit" -gt "$wd_mem_limit_auto_cap" ] && wd_mem_limit=$wd_mem_limit_auto_cap
 fi
 
-log "Watchdog" "Started (interval=${wd_interval}s, log_size_guard=$wd_log_guard, mem_limit=${wd_mem_limit}MB, mem_available_floor=${wd_mem_floor}%, mem_over_count=$wd_mem_over_count)."
+# 0 means "auto": 1500 open sockets. A healthy core sits at 100-200 even with a
+# pile of proxy groups and their health checks, so anything in the thousands is
+# unambiguously abnormal. Sockets are checked because they run ahead of the
+# heap: in the incident below the core had 11352 sockets while RSS was still
+# only 430 MB, so tripping here restarts the core while the box is still healthy
+# instead of after it has started swapping.
+wd_socket_limit_auto=1500
+if [ "$wd_socket_limit" -le 0 ]; then
+	wd_socket_limit=$wd_socket_limit_auto
+fi
+
+log "Watchdog" "Started (interval=${wd_interval}s, log_size_guard=$wd_log_guard, mem_limit=${wd_mem_limit}MB, mem_available_floor=${wd_mem_floor}%, mem_over_count=$wd_mem_over_count, socket_limit=${wd_socket_limit}, socket_over_count=$wd_socket_over_count)."
 
 over_count=0
+socket_over=0
 while :; do
 	sleep "$wd_interval"
 
 	# only guard while the service is actually running
 	if [ ! -f "$STARTED_FLAG_PATH" ]; then
 		over_count=0
+		socket_over=0
 		continue
 	fi
 
@@ -105,7 +131,36 @@ while :; do
 		fi
 	fi
 
-	# 2. keep the router from running out of memory. Two independent triggers:
+	# 2. restart the core if it is holding an absurd number of sockets. This is
+	#    the earliest signal available: a connection storm opens sockets minutes
+	#    before it shows up as memory pressure, and by the time the memory limit
+	#    trips the kernel may already be thrashing in swap.
+	socket_reason=""
+	if [ "$wd_socket_limit" -gt 0 ]; then
+		core_pid=$(get_core_pid)
+		if [ -n "$core_pid" ]; then
+			socket_count=$(get_pid_socket_count "$core_pid")
+			if [ -n "$socket_count" ] && [ "$socket_count" -ge "$wd_socket_limit" ]; then
+				socket_reason="core holds ${socket_count} sockets, over the ${wd_socket_limit} limit"
+			fi
+		fi
+	fi
+	if [ -n "$socket_reason" ]; then
+		socket_over=$((socket_over + 1))
+		guard_log "Watchdog" "Socket pressure: $socket_reason, ${socket_over}/${wd_socket_over_count}."
+		if [ "$socket_over" -ge "$wd_socket_over_count" ]; then
+			socket_over=0
+			echo -n > "$CORE_LOG_PATH"
+			guard_log "Watchdog" "Restarting core, $socket_reason."
+			kill -TERM "$(get_core_pid)" > /dev/null 2>&1
+			# give procd time to bring the core back before judging it again
+			continue
+		fi
+	else
+		socket_over=0
+	fi
+
+	# 3. keep the router from running out of memory. Two independent triggers:
 	#    the core growing past its limit, and the system as a whole running low
 	#    on usable memory (which also catches the RAM backed logs).
 	reason=""

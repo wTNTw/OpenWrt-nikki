@@ -239,6 +239,8 @@ section_watchdog=$(uci -q get nikki.watchdog); [ -z "$section_watchdog" ] && {
 	uci set nikki.watchdog.mem_limit=0
 	uci set nikki.watchdog.mem_available_floor=25
 	uci set nikki.watchdog.mem_over_count=2
+	uci set nikki.watchdog.socket_limit=0
+	uci set nikki.watchdog.socket_over_count=1
 }
 
 # since v2026.04.08-r3

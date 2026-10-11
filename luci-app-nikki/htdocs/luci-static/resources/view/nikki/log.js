@@ -158,6 +158,20 @@ return view.extend({
         o.depends('enabled', '1');
         o.description = _('Number of consecutive checks above the limit before the core is restarted.');
 
+        o = w.taboption('watchdog', form.Value, 'socket_limit', _('Core Socket Limit'));
+        o.datatype = 'uinteger';
+        o.placeholder = '0';
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Restart the core when it holds at least this many sockets. 0 = auto (1500). A healthy core stays around 100-200, and sockets climb well before memory does.');
+
+        o = w.taboption('watchdog', form.Value, 'socket_over_count', _('Core Socket Over Count'));
+        o.datatype = 'uinteger';
+        o.placeholder = '1';
+        o.rmempty = false;
+        o.depends('enabled', '1');
+        o.description = _('Number of consecutive checks above the socket limit before the core is restarted.');
+
         s.tab('debug_log', _('Debug Log'));
 
         o = s.taboption('debug_log', form.Button, '_generate_download_debug_log');
