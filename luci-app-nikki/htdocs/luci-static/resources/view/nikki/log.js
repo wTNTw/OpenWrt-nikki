@@ -18,7 +18,7 @@ return view.extend({
         const appLog = data[1];
         const coreLog = data[2];
 
-        let m, s, w, o;
+        let m, s, o;
 
         m = new form.Map('nikki');
 
@@ -116,61 +116,6 @@ return view.extend({
             const element = m.lookupOption('_core_log', section_id)[0].getUIElement(section_id).node.firstChild;
             element.scrollTop = element.scrollHeight;
         };
-
-        w = m.section(form.NamedSection, 'watchdog', 'watchdog', _('Watchdog'));
-
-        w.tab('watchdog', _('Watchdog'));
-
-        o = w.taboption('watchdog', form.Flag, 'enabled', _('Enable Watchdog'));
-        o.rmempty = false;
-        o.description = _('Keeps the logs within the size limit and restarts the core if it uses too much memory. On OpenWrt the logs live in RAM (tmpfs), so an unbounded log can exhaust memory and take the router offline.');
-
-        o = w.taboption('watchdog', form.Value, 'interval', _('Interval'));
-        o.datatype = 'uinteger';
-        o.placeholder = '10';
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Check interval in seconds.');
-
-        o = w.taboption('watchdog', form.Flag, 'log_size_guard', _('Log Size Guard'));
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Truncate the logs as soon as they exceed the scheduled clear size limit.');
-
-        o = w.taboption('watchdog', form.Value, 'mem_limit', _('Core Memory Limit'));
-        o.datatype = 'uinteger';
-        o.placeholder = '0';
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Restart the core when its resident memory stays above this many MB. 0 = auto (40% of the total RAM, capped at 800 MB).');
-
-        o = w.taboption('watchdog', form.Value, 'mem_available_floor', _('Available Memory Floor'));
-        o.datatype = 'uinteger';
-        o.placeholder = '25';
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Restart the core when the share of available system memory falls to this percentage. 0 disables the check.');
-
-        o = w.taboption('watchdog', form.Value, 'mem_over_count', _('Core Memory Over Count'));
-        o.datatype = 'uinteger';
-        o.placeholder = '2';
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Number of consecutive checks above the limit before the core is restarted.');
-
-        o = w.taboption('watchdog', form.Value, 'socket_limit', _('Core Socket Limit'));
-        o.datatype = 'uinteger';
-        o.placeholder = '0';
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Restart the core when it holds at least this many sockets. 0 = auto (1500). A healthy core stays around 100-200, and sockets climb well before memory does.');
-
-        o = w.taboption('watchdog', form.Value, 'socket_over_count', _('Core Socket Over Count'));
-        o.datatype = 'uinteger';
-        o.placeholder = '1';
-        o.rmempty = false;
-        o.depends('enabled', '1');
-        o.description = _('Number of consecutive checks above the socket limit before the core is restarted.');
 
         s.tab('debug_log', _('Debug Log'));
 
